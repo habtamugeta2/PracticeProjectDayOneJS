@@ -1,16 +1,275 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
-  provider = "prisma-client"
-  output   = "../lib/generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
+////////////////////////
+//// ENUMS
+////////////////////////
 
+enum Role {
+  ADMIN
+  DOCTOR
+  RECEPTIONIST
+  ACCOUNTANT
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CHECKED_IN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIAL
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  TELEBIRR
+  BANK_TRANSFER
+}
+
+////////////////////////
+//// USER SYSTEM
+////////////////////////
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(RECEPTIONIST)
+  isActive  Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  doctorAppointments  Appointment[] @relation("DoctorAppointments")
+  createdAppointments Appointment[] @relation("CreatedByUser")
+  createdInvoices     Invoice[]     @relation("InvoiceCreatedBy")
+  payments            Payment[]     @relation("PaymentCreatedBy")
+  auditLogs           AuditLog[]
+
+  @@index([email])
+  @@index([role])
+}
+
+////////////////////////
+//// PATIENT
+////////////////////////
+
+model Patient {
+  id               String   @id @default(uuid())
+  firstName        String
+  lastName         String
+  dateOfBirth      DateTime?
+  gender           Gender
+  phone            String
+  email            String?
+  address          String?
+  emergencyContact String?
+  notes            String?  @db.Text
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  appointments Appointment[]
+  invoices     Invoice[]
+
+  @@index([phone])
+  @@index([lastName, firstName])
+}
+
+////////////////////////
+//// SERVICES
+////////////////////////
+
+model Service {
+  id          String   @id @default(uuid())
+  name        String
+  description String?  @db.Text
+  price       Decimal  @db.Decimal(10,2)
+  duration    Int      @default(30)
+  category    String?
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  appointments Appointment[]
+  invoiceLines InvoiceLine[]
+
+  @@index([isActive])
+  @@index([category])
+}
+
+////////////////////////
+//// APPOINTMENTS
+////////////////////////
+
+model Appointment {
+  id        String            @id @default(uuid())
+  dateTime  DateTime
+  duration  Int               @default(30)
+  status    AppointmentStatus @default(SCHEDULED)
+  notes     String?           @db.Text
+
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  // Foreign Keys
+  patientId String
+  doctorId  String
+  serviceId String
+  createdById String
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  doctor    User    @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Restrict)
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  createdBy User    @relation("CreatedByUser", fields: [createdById], references: [id], onDelete: Restrict)
+
+  // Relations
+  invoice   Invoice?
+
+  @@index([patientId])
+  @@index([doctorId])
+  @@index([dateTime])
+  @@index([status])
+}
+
+////////////////////////
+//// INVOICES
+////////////////////////
+
+model Invoice {
+  id            String        @id @default(uuid())
+  invoiceNumber String        @unique
+  status        InvoiceStatus @default(DRAFT)
+
+  subtotal      Decimal       @db.Decimal(10,2)
+  tax           Decimal       @default(0) @db.Decimal(10,2)
+  total         Decimal       @db.Decimal(10,2)
+
+  dueDate       DateTime
+  notes         String?       @db.Text
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  // Foreign Keys
+  patientId     String
+  appointmentId String?       @unique
+  createdById   String
+
+  patient       Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  appointment   Appointment?  @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  createdBy     User          @relation("InvoiceCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  // Relations
+  lines         InvoiceLine[]
+  payments      Payment[]
+
+  @@index([patientId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+////////////////////////
+//// INVOICE ITEMS
+////////////////////////
+
+model InvoiceLine {
+  id          String  @id @default(uuid())
+  description String
+  quantity    Int
+  unitPrice   Decimal @db.Decimal(10,2)
+  lineTotal   Decimal @db.Decimal(10,2)
+
+  // Foreign Keys
+  invoiceId String
+  serviceId String
+
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  @@index([invoiceId])
+}
+
+////////////////////////
+//// PAYMENTS
+////////////////////////
+
+model Payment {
+  id        String        @id @default(uuid())
+  amount    Decimal       @db.Decimal(10,2)
+  method    PaymentMethod
+  reference String?
+  paidAt    DateTime      @default(now())
+
+  // Foreign Keys
+  invoiceId   String
+  createdById String
+
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  createdBy   User    @relation("PaymentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([invoiceId])
+}
+
+////////////////////////
+//// AUDIT LOGS
+////////////////////////
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+
+  ipAddress  String?
+
+  createdAt  DateTime @default(now())
+
+  // Foreign Key
+  actorId String
+  actor   User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+////////////////////////
+//// GLOBAL SETTINGS
+////////////////////////
+
+model Settings {
+  id                String @id @default(uuid())
+  businessName      String @default("My Clinic")
+  currency          String @default("ETB")
+  invoicePrefix     String @default("INV-")
+  workingHoursStart String @default("08:00")
+  workingHoursEnd   String @default("17:00")
+  timezone          String @default("Africa/Addis_Ababa")
+}
